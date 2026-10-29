@@ -16,8 +16,8 @@
     // ── Cast Receiver SDK ─────────────────────────────────────────────────
     const context = cast.framework.CastReceiverContext.getInstance();
 
-    // Intercept LOAD so the Cast framework doesn't try to play anything —
-    // we handle everything via the custom channel.
+    // Intercept LOAD so Cast doesn't try to play anything as media —
+    // all communication goes through the custom channel.
     context.getPlayerManager().setMessageInterceptor(
         cast.framework.messages.MessageType.LOAD,
         () => null
@@ -25,7 +25,7 @@
 
     // ── WebRTC ────────────────────────────────────────────────────────────
     let peer     = null;
-    let senderId = null;   // who to reply to
+    let senderId = null;
 
     function createPeer() {
         const p = new RTCPeerConnection({ iceServers: [] });
@@ -42,7 +42,7 @@
             status.textContent = 'Status: ICE ' + p.connectionState;
         };
 
-        // Send ICE candidates back to the iPhone via Cast channel
+        // Send ICE candidates back to iPhone via Cast channel
         p.onicecandidate = (e) => {
             if (e.candidate && senderId) {
                 context.sendCustomMessage(
@@ -56,7 +56,7 @@
         return p;
     }
 
-    // ── Cast Custom Channel message handler ───────────────────────────────
+    // ── Cast Custom Channel ───────────────────────────────────────────────
     context.addCustomMessageListener(NAMESPACE, async (event) => {
         senderId = event.senderId;
         const msg = JSON.parse(event.data);
@@ -78,7 +78,7 @@
         }
     });
 
-    // Start Cast session — responds to heartbeat so iPhone shows "Connected"
+    // ── Start Cast session ────────────────────────────────────────────────
     window.addEventListener('load', () => {
         try {
             const options = new cast.framework.CastReceiverOptions();
