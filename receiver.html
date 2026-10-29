@@ -4,28 +4,114 @@
   <meta charset="utf-8">
   <title>ShileiCast Receiver</title>
   <script src="//www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #0a0a0f; color: #fff; font-family: monospace; height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; overflow: hidden; }
+
+    /* Animated background gradient */
+    body::before {
+      content: '';
+      position: fixed; inset: 0;
+      background: radial-gradient(ellipse at 20% 50%, #1a003a 0%, transparent 60%),
+                  radial-gradient(ellipse at 80% 50%, #003a1a 0%, transparent 60%);
+      animation: bgshift 6s ease-in-out infinite alternate;
+      z-index: 0;
+    }
+    @keyframes bgshift {
+      from { opacity: 0.6; }
+      to   { opacity: 1; }
+    }
+
+    .container { position: relative; z-index: 1; text-align: center; width: 100%; padding: 40px; }
+
+    /* Pulsing ring */
+    .ring {
+      width: 180px; height: 180px;
+      border-radius: 50%;
+      border: 4px solid rgba(0,255,120,0.15);
+      margin: 0 auto 40px;
+      position: relative;
+      animation: spin 8s linear infinite;
+    }
+    .ring::before, .ring::after {
+      content: '';
+      position: absolute; inset: 12px;
+      border-radius: 50%;
+      border: 2px solid transparent;
+    }
+    .ring::before {
+      border-top-color: #00ff78;
+      border-right-color: #00ff78;
+      animation: spin 2s linear infinite;
+    }
+    .ring::after {
+      border-bottom-color: #00aaff;
+      border-left-color: #00aaff;
+      animation: spin 3s linear infinite reverse;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* Dot in center of ring */
+    .dot {
+      position: absolute; top: 50%; left: 50%;
+      transform: translate(-50%, -50%);
+      width: 24px; height: 24px;
+      border-radius: 50%;
+      background: #00ff78;
+      box-shadow: 0 0 20px #00ff78, 0 0 40px #00ff7844;
+      animation: pulse 2s ease-in-out infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { transform: translate(-50%,-50%) scale(1); opacity: 1; }
+      50%       { transform: translate(-50%,-50%) scale(1.4); opacity: 0.6; }
+    }
+
+    .title { font-size: 2rem; font-weight: bold; letter-spacing: 0.15em; color: #00ff78; margin-bottom: 8px; }
+    .version { font-size: 0.75rem; color: #444; letter-spacing: 0.1em; margin-bottom: 40px; }
+
+    #status {
+      font-size: 1.1rem; color: #00ff78;
+      background: rgba(0,255,120,0.08);
+      border: 1px solid rgba(0,255,120,0.2);
+      border-radius: 8px;
+      padding: 14px 28px;
+      display: inline-block;
+      min-width: 420px;
+      letter-spacing: 0.05em;
+      transition: all 0.4s ease;
+    }
+    #status.active {
+      color: #00aaff;
+      border-color: rgba(0,170,255,0.4);
+      background: rgba(0,170,255,0.08);
+      box-shadow: 0 0 24px rgba(0,170,255,0.15);
+    }
+
+    video { position: fixed; inset: 0; width: 100%; height: 100%; object-fit: cover; display: none; z-index: 10; }
+  </style>
 </head>
 <body>
-<div id="status" style="font-family:monospace;padding:8px;background:#111;color:#0f0;">Status: loading…</div>
-<div>
-
-    <svg width="32" height="32" viewBox="0 0 32 32">
-        <path d="M16 0 C24 8, 24 24, 16 32 C8 24, 8 8, 16 0 Z" fill="#0f0">
-            <animateTransform attributeName="transform" type="rotate" from="0 16 16" to="360 16 16" dur="2s" repeatCount="indefinite"/>
-        </path>
-    </svg>
+<div class="container">
+  <div class="ring"><div class="dot"></div></div>
+  <div class="title">ShileiCast</div>
+  <div class="version">v0.2.1 · Cast Custom Channel</div>
+  <div id="status">Status: loading…</div>
 </div>
-<video id="remote" autoplay playsinline muted style="width:100%;height:auto;"></video>
+<video id="remote" autoplay playsinline muted></video>
+
 <script>
     const NAMESPACE = 'urn:x-cast:com.shilei.cast.webrtc';
-    const status   = document.getElementById('status');
-    const video    = document.getElementById('remote');
+    const statusEl  = document.getElementById('status');
+    const video     = document.getElementById('remote');
+
+    function setStatus(text, active) {
+        statusEl.textContent = text;
+        statusEl.className = active ? 'active' : '';
+    }
 
     // ── Cast Receiver SDK ─────────────────────────────────────────────────
     const context = cast.framework.CastReceiverContext.getInstance();
 
-    // Intercept LOAD so Cast doesn't try to play anything as media —
-    // all communication goes through the custom channel.
     context.getPlayerManager().setMessageInterceptor(
         cast.framework.messages.MessageType.LOAD,
         () => null
@@ -39,18 +125,19 @@
         const p = new RTCPeerConnection({ iceServers: [] });
 
         p.ontrack = (event) => {
-            status.textContent = 'Status: track received — playing';
+            setStatus('Status: track received — playing', true);
             video.srcObject = event.streams.length > 0
                 ? event.streams[0]
                 : new MediaStream([event.track]);
+            video.style.display = 'block';
             video.play().catch(e => console.error('play() failed:', e));
         };
 
         p.onconnectionstatechange = () => {
-            status.textContent = 'Status: ICE ' + p.connectionState;
+            const s = p.connectionState;
+            setStatus('Status: ICE ' + s, s === 'connected');
         };
 
-        // Send ICE candidates back to iPhone via Cast channel
         p.onicecandidate = (e) => {
             if (e.candidate && senderId) {
                 context.sendCustomMessage(
@@ -70,7 +157,7 @@
         const msg = JSON.parse(event.data);
 
         if (msg.type === 'offer') {
-            status.textContent = 'Status: offer received — negotiating';
+            setStatus('Status: offer received — negotiating…', true);
             peer = createPeer();
             await peer.setRemoteDescription(new RTCSessionDescription(msg));
             const answer = await peer.createAnswer();
@@ -80,7 +167,7 @@
                 senderId,
                 JSON.stringify({ type: 'answer', sdp: answer.sdp })
             );
-            status.textContent = 'Status: answer sent — waiting for ICE';
+            setStatus('Status: answer sent — waiting for ICE…', true);
         } else if (msg.type === 'candidate' && peer) {
             await peer.addIceCandidate(new RTCIceCandidate(msg.candidate));
         }
@@ -92,9 +179,9 @@
             const options = new cast.framework.CastReceiverOptions();
             options.disableIdleTimeout = true;
             context.start(options);
-            status.textContent = 'Status: Cast ready — waiting for stream';
+            setStatus('Status: Cast ready — waiting for stream');
         } catch(e) {
-            status.textContent = 'Cast error: ' + e.message;
+            setStatus('Cast error: ' + e.message);
             console.error(e);
         }
     });
