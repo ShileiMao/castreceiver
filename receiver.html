@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>ShileiCast Receiver</title>
+  <script src="//www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js"></script>
+</head>
+<body>
+<div id="status" style="font-family:monospace;padding:8px;background:#111;color:#0f0;">Status: loading…</div>
+<video id="remote" autoplay playsinline muted style="width:100%;height:auto;"></video>
+<script>
+    const NAMESPACE = 'urn:x-cast:com.shilei.cast.webrtc';
+    const status   = document.getElementById('status');
+    const video    = document.getElementById('remote');
+
+    // ── Cast Receiver SDK ─────────────────────────────────────────────────
+    const context = cast.framework.CastReceiverContext.getInstance();
+
+    // Intercept LOAD so the Cast framework doesn't try to play anything —
+    // we handle everything via the custom channel.
+    context.getPlayerManager().setMessageInterceptor(
+        cast.framework.messages.MessageType.LOAD,
+        () => null
+    );
+
+    // ── WebRTC ────────────────────────────────────────────────────────────
+    let peer     = null;
+    let senderId = null;   // who to reply to
+
+    function createPeer() {
+        const p = new RTCPeerConnection({ iceServers: [] });
+
+        p.ontrack = (event) => {
+            status.textContent = 'Status: track received — playing';
+            video.srcObject = event.streams.length > 0
+                ? event.streams[0]
+                : new MediaStream([event.track]);
+            video.play().catch(e => console.error('play() failed:', e));
+        };
+
+        p.onconnectionstatechange = () => {
+            status.textContent = 'Status: ICE ' + p.connectionState;
+        };
+
+        // Send ICE candidates back to the iPhone via Cast channel
+        p.onicecandidate = (e) => {
+            if (e.candidate && senderId) {
+                context.sendCustomMessage(
+                    NAMESPACE,
+                    senderId,
+                    JSON.stringify({ type: 'candidate', candidate: e.candidate })
+                );
+            }
+        };
+
+        return p;
+    }
+
+    // ── Cast Custom Channel message handler ───────────────────────────────
+    context.addCustomMessageListener(NAMESPACE, async (event) => {
+        senderId = event.senderId;
+        const msg = JSON.parse(event.data);
+
+        if (msg.type === 'offer') {
+            status.textContent = 'Status: offer received — negotiating';
+            peer = createPeer();
+            await peer.setRemoteDescription(new RTCSessionDescription(msg));
+            const answer = await peer.createAnswer();
+            await peer.setLocalDescription(answer);
+            context.sendCustomMessage(
+                NAMESPACE,
+                senderId,
+                JSON.stringify({ type: 'answer', sdp: answer.sdp })
+            );
+            status.textContent = 'Status: answer sent — waiting for ICE';
+        } else if (msg.type === 'candidate' && peer) {
+            await peer.addIceCandidate(new RTCIceCandidate(msg.candidate));
+        }
+    });
+
+    // Start Cast session — responds to heartbeat so iPhone shows "Connected"
+    window.addEventListener('load', () => {
+        try {
+            const options = new cast.framework.CastReceiverOptions();
+            options.disableIdleTimeout = true;
+            context.start(options);
+            status.textContent = 'Status: Cast ready — waiting for stream';
+        } catch(e) {
+            status.textContent = 'Cast error: ' + e.message;
+            console.error(e);
+        }
+    });
+</script>
+</body>
+</html>
