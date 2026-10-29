@@ -7,6 +7,14 @@
 </head>
 <body>
 <div id="status" style="font-family:monospace;padding:8px;background:#111;color:#0f0;">Status: loading…</div>
+<div>
+
+    <svg width="32" height="32" viewBox="0 0 32 32">
+        <path d="M16 0 C24 8, 24 24, 16 32 C8 24, 8 8, 16 0 Z" fill="#0f0">
+            <animateTransform attributeName="transform" type="rotate" from="0 16 16" to="360 16 16" dur="2s" repeatCount="indefinite"/>
+        </path>
+    </svg>
+</div>
 <video id="remote" autoplay playsinline muted style="width:100%;height:auto;"></video>
 <script>
     const NAMESPACE = 'urn:x-cast:com.shilei.cast.webrtc';
