@@ -153,23 +153,30 @@
 
     // ── Cast Custom Channel ───────────────────────────────────────────────
     context.addCustomMessageListener(NAMESPACE, async (event) => {
-        senderId = event.senderId;
-        const msg = JSON.parse(event.data);
+        try {
+            senderId = event.senderId;
+            const msg = JSON.parse(event.data);
+            // Show immediately so we know the message arrived even if processing fails
+            setStatus('Status: msg received — type: ' + msg.type, true);
 
-        if (msg.type === 'offer') {
-            setStatus('Status: offer received — negotiating…', true);
-            peer = createPeer();
-            await peer.setRemoteDescription(new RTCSessionDescription(msg));
-            const answer = await peer.createAnswer();
-            await peer.setLocalDescription(answer);
-            context.sendCustomMessage(
-                NAMESPACE,
-                senderId,
-                JSON.stringify({ type: 'answer', sdp: answer.sdp })
-            );
-            setStatus('Status: answer sent — waiting for ICE…', true);
-        } else if (msg.type === 'candidate' && peer) {
-            await peer.addIceCandidate(new RTCIceCandidate(msg.candidate));
+            if (msg.type === 'offer') {
+                setStatus('Status: offer received — negotiating…', true);
+                peer = createPeer();
+                await peer.setRemoteDescription(new RTCSessionDescription(msg));
+                const answer = await peer.createAnswer();
+                await peer.setLocalDescription(answer);
+                context.sendCustomMessage(
+                    NAMESPACE,
+                    senderId,
+                    JSON.stringify({ type: 'answer', sdp: answer.sdp })
+                );
+                setStatus('Status: answer sent — waiting for ICE…', true);
+            } else if (msg.type === 'candidate' && peer) {
+                await peer.addIceCandidate(new RTCIceCandidate(msg.candidate));
+            }
+        } catch(e) {
+            setStatus('❌ JS error: ' + e.message);
+            console.error('message handler error:', e);
         }
     });
 
