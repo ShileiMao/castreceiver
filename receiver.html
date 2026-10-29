@@ -94,7 +94,7 @@
 <div class="container">
   <div class="ring"><div class="dot"></div></div>
   <div class="title">ShileiCast</div>
-  <div class="version">v0.2.1 · Cast Custom Channel</div>
+  <div class="version">v0.2.3 · 2026-10-29 · Cast Custom Channel</div>
   <div id="status">Status: loading…</div>
 </div>
 <video id="remote" autoplay playsinline muted></video>
@@ -140,11 +140,9 @@
 
         p.onicecandidate = (e) => {
             if (e.candidate && senderId) {
-                context.sendCustomMessage(
-                    NAMESPACE,
-                    senderId,
-                    JSON.stringify({ type: 'candidate', candidate: e.candidate })
-                );
+                // Pass object directly — CAF v3 serializes it; JSON.stringify causes double-encoding
+                context.sendCustomMessage(NAMESPACE, senderId,
+                    { type: 'candidate', candidate: e.candidate });
             }
         };
 
@@ -166,11 +164,9 @@
                 await peer.setRemoteDescription(new RTCSessionDescription(msg));
                 const answer = await peer.createAnswer();
                 await peer.setLocalDescription(answer);
-                context.sendCustomMessage(
-                    NAMESPACE,
-                    senderId,
-                    JSON.stringify({ type: 'answer', sdp: answer.sdp })
-                );
+                // Pass object directly — CAF v3 serializes it; JSON.stringify causes double-encoding
+                context.sendCustomMessage(NAMESPACE, senderId,
+                    { type: 'answer', sdp: answer.sdp });
                 setStatus('Status: answer sent — waiting for ICE…', true);
             } else if (msg.type === 'candidate' && peer) {
                 await peer.addIceCandidate(new RTCIceCandidate(msg.candidate));
