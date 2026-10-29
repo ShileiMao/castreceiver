@@ -155,7 +155,8 @@
     context.addCustomMessageListener(NAMESPACE, async (event) => {
         try {
             senderId = event.senderId;
-            const msg = JSON.parse(event.data);
+            // CAF v3 auto-parses JSON; event.data is already an object
+            const msg = (typeof event.data === 'string') ? JSON.parse(event.data) : event.data;
             // Show immediately so we know the message arrived even if processing fails
             setStatus('Status: msg received — type: ' + msg.type, true);
 
