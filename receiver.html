@@ -110,7 +110,7 @@
 <div class="container">
   <div class="ring"><div class="dot"></div></div>
   <div class="title">ShileiCast</div>
-  <div class="version">v0.2.4 · 2026-11-16 · Cast Custom Channel · low-latency</div>
+  <div class="version">v0.2.6 · 2026-11-19 · Cast Custom Channel · lag diagnostics</div>
   <div id="status">Status: loading…</div>
 </div>
 <video id="remote" autoplay playsinline muted></video>
@@ -145,7 +145,10 @@
     // whether ICE picked UDP (good) or TCP (adds latency).
     let statsTimer = null;
     const statsEl = document.getElementById('stats');
-    let lastJb = null;
+    // All numbers are over the LAST 2 s interval (not lifetime averages), so a
+    // queue that builds up over time shows as a value that keeps climbing.
+    let lastIn = null;      // previous inbound-rtp snapshot
+    let lagStart = null;    // first "lag" reading, to compare against
 
     async function updateStats(p) {
         try {
@@ -159,17 +162,31 @@
             });
             const lines = [];
             if (inbound) {
-                // Jitter buffer delay over the last interval (not lifetime average)
-                let jbMs = '-';
-                if (lastJb && inbound.jitterBufferEmittedCount > lastJb.count) {
-                    jbMs = (1000 * (inbound.jitterBufferDelay - lastJb.delay) /
-                            (inbound.jitterBufferEmittedCount - lastJb.count)).toFixed(0);
+                const prev = lastIn;
+                lastIn = {
+                    t: inbound.timestamp, recv: inbound.framesReceived || 0,
+                    dec: inbound.framesDecoded || 0, drop: inbound.framesDropped || 0,
+                    decTime: inbound.totalDecodeTime || 0, bytes: inbound.bytesReceived || 0,
+                    jb: inbound.jitterBufferDelay || 0, jbN: inbound.jitterBufferEmittedCount || 0,
+                    proc: inbound.totalProcessingDelay || 0,
+                };
+                lines.push(`${inbound.frameWidth || '?'}x${inbound.frameHeight || '?'}`);
+                if (prev) {
+                    const cur = lastIn, dt = (cur.t - prev.t) / 1000 || 2;
+                    const dDec = cur.dec - prev.dec;
+                    const per = (a, n) => n > 0 ? (1000 * a / n).toFixed(0) : '-';
+                    const recvFps = ((cur.recv - prev.recv) / dt).toFixed(0);
+                    const decFps  = (dDec / dt).toFixed(0);
+                    const mbps    = ((cur.bytes - prev.bytes) * 8 / dt / 1e6).toFixed(2);
+                    const jbMs    = per(cur.jb - prev.jb, cur.jbN - prev.jbN);
+                    const decMs   = per(cur.decTime - prev.decTime, dDec);
+                    // processing delay = packet arrival -> frame decoded (jitter buffer + decode)
+                    const lagMs   = per(cur.proc - prev.proc, dDec);
+                    if (lagStart === null && lagMs !== '-') lagStart = lagMs;
+                    lines.push(`in ${recvFps} fps · decoded ${decFps} fps · dropped +${cur.drop - prev.drop} · ${mbps} Mbps`);
+                    lines.push(`jitter buf ${jbMs} ms · decode ${decMs} ms`);
+                    lines.push(`lag now ${lagMs} ms (start ${lagStart ?? '-'} ms)`);
                 }
-                lastJb = { delay: inbound.jitterBufferDelay, count: inbound.jitterBufferEmittedCount };
-                const decMs = inbound.framesDecoded
-                    ? (1000 * inbound.totalDecodeTime / inbound.framesDecoded).toFixed(1) : '-';
-                lines.push(`${inbound.frameWidth || '?'}x${inbound.frameHeight || '?'} @ ${inbound.framesPerSecond || 0} fps`);
-                lines.push(`jitter buf ${jbMs} ms · decode ${decMs} ms · dropped ${inbound.framesDropped || 0}`);
             }
             if (pair) {
                 const local = byId.get(pair.localCandidateId);
@@ -208,7 +225,8 @@
             video.play().catch(e => console.error('play() failed:', e));
 
             if (statsTimer) clearInterval(statsTimer);
-            lastJb = null;
+            lastIn = null;
+            lagStart = null;
             statsTimer = setInterval(() => updateStats(p), 2000);
         };
 
