@@ -110,7 +110,7 @@
 <div class="container">
   <div class="ring"><div class="dot"></div></div>
   <div class="title">ShileiCast</div>
-  <div class="version">v0.2.7 · 2026-11-19 · Cast Custom Channel · adaptive quality</div>
+  <div class="version">v0.2.8 · 2026-11-19 · Cast Custom Channel · quality settings</div>
   <div id="status">Status: loading…</div>
 </div>
 <video id="remote" autoplay playsinline muted></video>
@@ -325,7 +325,7 @@
             } else if (msg.type === 'candidate' && peer) {
                 await peer.addIceCandidate(new RTCIceCandidate(msg.candidate));
             } else if (msg.type === 'quality') {
-                qualityText = `tier ${msg.tier}/${msg.maxTier} · ${msg.fps} fps · ≤${(msg.kbps / 1000).toFixed(1)} Mbps`;
+                qualityText = `${msg.summary} · ≤${(msg.kbps / 1000).toFixed(1)} Mbps`;
             }
         } catch(e) {
             setStatus('❌ JS error: ' + e.message);
