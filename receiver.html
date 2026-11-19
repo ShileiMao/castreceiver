@@ -87,19 +87,37 @@
       box-shadow: 0 0 24px rgba(0,170,255,0.15);
     }
 
-    video { position: fixed; inset: 0; width: 100%; height: 100%; object-fit: cover; display: none; z-index: 10; }
+    video { position: fixed; inset: 0; width: 100%; height: 100%; object-fit: contain; background: #000; display: none; z-index: 10; }
+
+    /* While streaming: remove the splash entirely so the Chromecast GPU/CPU only
+       composites the video. The animations above (full-screen gradient, spinning
+       ring, box-shadow pulse) otherwise keep repainting behind the video and
+       starve decode/render → visible lag. */
+    body.streaming { background: #000; }
+    body.streaming::before { display: none; animation: none; }
+    body.streaming .container { display: none; }
+    body.streaming .container * { animation: none; }
+
+    #stats {
+      position: fixed; left: 12px; bottom: 12px; z-index: 11;
+      font-size: 0.8rem; color: #0f0; background: rgba(0,0,0,0.6);
+      padding: 4px 8px; border-radius: 4px; display: none; white-space: pre;
+    }
+    body.streaming #stats { display: block; }
   </style>
 </head>
 <body>
 <div class="container">
   <div class="ring"><div class="dot"></div></div>
   <div class="title">ShileiCast</div>
-  <div class="version">v0.2.3 · 2026-10-29 · Cast Custom Channel</div>
+  <div class="version">v0.2.4 · 2026-11-16 · Cast Custom Channel · low-latency</div>
   <div id="status">Status: loading…</div>
 </div>
 <video id="remote" autoplay playsinline muted></video>
+<div id="stats"></div>
 
 <script>
+  
     const NAMESPACE = 'urn:x-cast:com.shilei.cast.webrtc';
     const statusEl  = document.getElementById('status');
     const video     = document.getElementById('remote');
@@ -121,21 +139,83 @@
     let peer     = null;
     let senderId = null;
 
+    // ── Latency stats overlay (bottom-left while streaming) ────────────────
+    // Shows what the TV is actually doing so latency regressions are visible:
+    // fps, resolution, jitter-buffer delay, decode time, dropped frames, and
+    // whether ICE picked UDP (good) or TCP (adds latency).
+    let statsTimer = null;
+    const statsEl = document.getElementById('stats');
+    let lastJb = null;
+
+    async function updateStats(p) {
+        try {
+            const report = await p.getStats();
+            let inbound = null, pair = null;
+            const byId = new Map();
+            report.forEach(s => {
+                byId.set(s.id, s);
+                if (s.type === 'inbound-rtp' && s.kind === 'video') inbound = s;
+                if (s.type === 'candidate-pair' && s.nominated && s.state === 'succeeded') pair = s;
+            });
+            const lines = [];
+            if (inbound) {
+                // Jitter buffer delay over the last interval (not lifetime average)
+                let jbMs = '-';
+                if (lastJb && inbound.jitterBufferEmittedCount > lastJb.count) {
+                    jbMs = (1000 * (inbound.jitterBufferDelay - lastJb.delay) /
+                            (inbound.jitterBufferEmittedCount - lastJb.count)).toFixed(0);
+                }
+                lastJb = { delay: inbound.jitterBufferDelay, count: inbound.jitterBufferEmittedCount };
+                const decMs = inbound.framesDecoded
+                    ? (1000 * inbound.totalDecodeTime / inbound.framesDecoded).toFixed(1) : '-';
+                lines.push(`${inbound.frameWidth || '?'}x${inbound.frameHeight || '?'} @ ${inbound.framesPerSecond || 0} fps`);
+                lines.push(`jitter buf ${jbMs} ms · decode ${decMs} ms · dropped ${inbound.framesDropped || 0}`);
+            }
+            if (pair) {
+                const local = byId.get(pair.localCandidateId);
+                const rtt = pair.currentRoundTripTime != null
+                    ? (pair.currentRoundTripTime * 1000).toFixed(0) + ' ms' : '-';
+                lines.push(`net ${local ? local.protocol : '?'} · rtt ${rtt}`);
+            }
+            statsEl.textContent = lines.join('\n');
+        } catch (e) { /* stats are best-effort */ }
+    }
+
+    function exitStreaming() {
+        document.body.classList.remove('streaming');
+        video.style.display = 'none';
+        if (statsTimer) { clearInterval(statsTimer); statsTimer = null; }
+    }
+
     function createPeer() {
         const p = new RTCPeerConnection({ iceServers: [] });
 
         p.ontrack = (event) => {
+            // Ask Chrome to keep the jitter buffer as small as possible.
+            // jitterBufferTarget (newer Chrome) and playoutDelayHint (older
+            // Cast firmware) are both hints; unsupported ones are ignored.
+            try {
+                if ('jitterBufferTarget' in event.receiver) event.receiver.jitterBufferTarget = 0;
+                if ('playoutDelayHint' in event.receiver) event.receiver.playoutDelayHint = 0;
+            } catch (e) { console.warn('latency hint not applied:', e); }
+
             setStatus('Status: track received — playing', true);
             video.srcObject = event.streams.length > 0
                 ? event.streams[0]
                 : new MediaStream([event.track]);
             video.style.display = 'block';
+            document.body.classList.add('streaming');
             video.play().catch(e => console.error('play() failed:', e));
+
+            if (statsTimer) clearInterval(statsTimer);
+            lastJb = null;
+            statsTimer = setInterval(() => updateStats(p), 2000);
         };
 
         p.onconnectionstatechange = () => {
             const s = p.connectionState;
             setStatus('Status: ICE ' + s, s === 'connected');
+            if (s === 'failed' || s === 'closed' || s === 'disconnected') exitStreaming();
         };
 
         p.onicecandidate = (e) => {
@@ -160,6 +240,8 @@
 
             if (msg.type === 'offer') {
                 setStatus('Status: offer received — negotiating…', true);
+                // A new offer replaces any previous connection (e.g. Stop → Start again)
+                if (peer) { peer.close(); exitStreaming(); }
                 peer = createPeer();
                 await peer.setRemoteDescription(new RTCSessionDescription(msg));
                 const answer = await peer.createAnswer();
