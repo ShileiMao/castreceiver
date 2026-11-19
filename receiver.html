@@ -110,7 +110,7 @@
 <div class="container">
   <div class="ring"><div class="dot"></div></div>
   <div class="title">ShileiCast</div>
-  <div class="version">v0.2.6 · 2026-11-19 · Cast Custom Channel · lag diagnostics</div>
+  <div class="version">v0.2.7 · 2026-11-19 · Cast Custom Channel · adaptive quality</div>
   <div id="status">Status: loading…</div>
 </div>
 <video id="remote" autoplay playsinline muted></video>
@@ -149,6 +149,49 @@
     // queue that builds up over time shows as a value that keeps climbing.
     let lastIn = null;      // previous inbound-rtp snapshot
     let lagStart = null;    // first "lag" reading, to compare against
+    let qualityText = '';   // current tier, as announced by the sender
+
+    // ── Adaptive quality: what this device can decode ─────────────────────
+    // MUST match kQualityTiers in ScreenCastSession.swift. w/h = long x short side
+    // (decoder limits depend on pixel count, so orientation does not matter).
+    const TIERS = [
+        { fps: 24, kbps: 2000, w: 960,  h: 444 },
+        { fps: 30, kbps: 3000, w: 1280, h: 592 },
+        { fps: 45, kbps: 4500, w: 1280, h: 592 },
+        { fps: 60, kbps: 6000, w: 1280, h: 592 },
+        { fps: 60, kbps: 8000, w: 1920, h: 888 },
+    ];
+
+    async function canPlaySmoothly(t) {
+        // 1) Standard Media Capabilities API, WebRTC flavour (newer Chrome)
+        try {
+            if (navigator.mediaCapabilities) {
+                const r = await navigator.mediaCapabilities.decodingInfo({
+                    type: 'webrtc',
+                    video: { contentType: 'video/H264', width: t.w, height: t.h,
+                             bitrate: t.kbps * 1000, framerate: t.fps },
+                });
+                if (r && r.supported) return !!r.smooth;
+            }
+        } catch (e) { /* 'webrtc' type not supported on this firmware */ }
+        // 2) Cast framework check (all Cast firmware)
+        try {
+            return context.canDisplayType('video/mp4', 'avc1.640028', t.w, t.h, t.fps) === true;
+        } catch (e) { return false; }
+    }
+
+    // Highest tier (stopping at the first failure) this device says it handles smoothly.
+    async function detectMaxTier() {
+        let max = 1;   // tiers 0-1 are always allowed; runtime stats still guard them
+        for (let i = 2; i < TIERS.length; i++) {
+            if (await canPlaySmoothly(TIERS[i])) max = i; else break;
+        }
+        return max;
+    }
+
+    function sendToSender(obj) {
+        if (senderId) context.sendCustomMessage(NAMESPACE, senderId, obj);
+    }
 
     async function updateStats(p) {
         try {
@@ -186,7 +229,14 @@
                     lines.push(`in ${recvFps} fps · decoded ${decFps} fps · dropped +${cur.drop - prev.drop} · ${mbps} Mbps`);
                     lines.push(`jitter buf ${jbMs} ms · decode ${decMs} ms`);
                     lines.push(`lag now ${lagMs} ms (start ${lagStart ?? '-'} ms)`);
+
+                    // Feed the sender's adaptive-quality loop
+                    const n = v => (v === '-' ? null : Number(v));
+                    sendToSender({ type: 'stats', recvFps: Number(recvFps), decFps: Number(decFps),
+                                   dropped: cur.drop - prev.drop, lagMs: n(lagMs),
+                                   jitterMs: n(jbMs), decodeMs: n(decMs) });
                 }
+                if (qualityText) lines.push(qualityText);
             }
             if (pair) {
                 const local = byId.get(pair.localCandidateId);
@@ -227,6 +277,10 @@
             if (statsTimer) clearInterval(statsTimer);
             lastIn = null;
             lagStart = null;
+            // Tell the sender how far it may raise quality on this device
+            detectMaxTier().then(maxTier => sendToSender({
+                type: 'caps', maxTier, model: navigator.userAgent.slice(0, 120),
+            }));
             statsTimer = setInterval(() => updateStats(p), 2000);
         };
 
@@ -270,6 +324,8 @@
                 setStatus('Status: answer sent — waiting for ICE…', true);
             } else if (msg.type === 'candidate' && peer) {
                 await peer.addIceCandidate(new RTCIceCandidate(msg.candidate));
+            } else if (msg.type === 'quality') {
+                qualityText = `tier ${msg.tier}/${msg.maxTier} · ${msg.fps} fps · ≤${(msg.kbps / 1000).toFixed(1)} Mbps`;
             }
         } catch(e) {
             setStatus('❌ JS error: ' + e.message);
